@@ -37,7 +37,7 @@ int main()
 	double start_time, end_time;
 
 	// Распараллеливаем расчеты
-	#pragma omp parallel
+	#pragma omp parallel private(k)
 	{
 
 		// Замеряем время работы
@@ -51,6 +51,7 @@ int main()
 			k = 2 + 2 * (i % 2);
 
 			// Суммируем каждый отрезок
+			#pragma omp atomic
 			sum += k * integFunc(A + i * h);
 		}
 
