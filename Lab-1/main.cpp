@@ -19,6 +19,8 @@
 #include <vector>
 #include <ctime>
 #include <iostream>
+#include <mutex>
+
 
 using namespace std;
 
@@ -42,49 +44,63 @@ const int MAX_DIAG = MIN_DIAG + 100;
 // Сколько потоков
 const int THREADS_AMOUNT = 4;
 
+std::mutex mute;
 
-void gaussZeidel(vector<vector<int>> matrix, long long int start_equasion, int amount_of_equasions, double x_zero, int x_amount, int max_iterations, vector<double>& X)
+void gaussZeidel(vector<vector<int>> matrix, int size, int matr_size, int first, double x_zero, int max_iterations, vector<double>& X)
 {
 
-	
 	// Создаем вектор под иксы (для двух итераций)
-	vector<double> X_PREV(amount_of_equasions, x_zero);
+	vector<double> X_PREV(matr_size, x_zero);
 
 	// Создаем флаг для определения окончания расчета
 	bool eps_reached = false;
 
+	// Локальная переменная под последние расчитанные иксы
+	vector<double> X_LOCAL(matr_size, x_zero);
+
 	// Начинаем расчет
-	for (int i = 0; i < max_iterations; i++)
+	for (int k = 0; k < max_iterations; k++)
 	{
+		int i, j;
 
-		// Копируем значения иксов текущей итерации
-		for (int i = 0; i < amount_of_equasions; i++) {
-			X_PREV[i] = X[start_equasion + i];
-		}
-
-		// В цикле проходимся по каждой строке матрицы (каждому уравнению)
-		for (int n = 0; n < amount_of_equasions; n++)
+		// В цикле проходимся по каждой строке матрицы для данного потока (каждому уравнению)
+		for (i = 0; i < size; i++)
 		{
 			// Создаем временную переменную для подсчета суммы
 			double tmp_val = 0;
 
 			// Проходимся по всем слагаемым данного уравнения и суммируем их
-			for (int k = 0; k < amount_of_equasions; k++)
-				if (k + start_equasion != n + start_equasion)
-					tmp_val += (matrix[n + start_equasion][k + start_equasion] * X[k + start_equasion]);
+			for (j = 0; j < i + first; j++)
+				tmp_val += (matrix[i + first][j] * X_PREV[j]);
+
+			for (j = i + 1 + first; j < matr_size; j++)
+				tmp_val += (matrix[i + first][j] * X_LOCAL[j]);
 
 			// Вычитаем из свободного члена сумму и делим результат на соответствующий коэф матрицы
-			X[start_equasion + n] = (X[start_equasion + n] - tmp_val) / matrix[n + start_equasion][n + start_equasion];
+			X_LOCAL[i + first] = (X_LOCAL[i + first] - tmp_val) / matrix[i + first][i + first];
+
 		}
 
 		// Считаем погрешность (сумма квадратов разниц текущих иксов и иксов предыдущей итерации)
 		double norm = 0;
-		for (int i = 0; i < amount_of_equasions; i++)
-			norm += (X[i + start_equasion] - X_PREV[i]) * (X[i + start_equasion] - X_PREV[i]);
+		for (int l = 0; l < size; l++)
+			norm += pow((abs(X_LOCAL[l + first]) - abs(X_PREV[l + first])), 2);
 
 		// Считаем достигнута ли нужная точность
 		if (sqrt(norm) < EPS)
 			eps_reached = true;
+
+		mute.lock();
+
+		// Копируем значения иксов текущей итерации
+		for (int m = 0; m < size; m++) {
+			X[m + first] = X_LOCAL[m + first];
+		}
+
+		X_LOCAL = X;
+		X_PREV = X;
+
+		mute.unlock();
 
 		// Если достигли точности, то выходим из цикла
 		if (eps_reached)
@@ -123,8 +139,8 @@ int main()
 	// Начальное приближение
 	double zero_iteration = 1;
 
-	// По сколько уравнений даем каждому потоку
-	int amount_of_equasions = N / THREADS_AMOUNT;
+	// По сколько иксов будет дано на поиск каждому потоку
+	int size = N / THREADS_AMOUNT;
 
 	// Замер времени начала
 	clock_t start_time = clock();
@@ -135,19 +151,21 @@ int main()
 	// Создаем результирующий вектор для иксов
 	vector<double> X(N, zero_iteration);
 
+	// Начиная с какого икса нужно исать решения каждому потоку
+	int first = 0;
+
 	// Проходимся по всем потокам
 	for (int thread_num = 0; thread_num < THREADS_AMOUNT; thread_num++)
 	{
 
 		// Для каждого потока через лямбду записываем рассчитанные данные
-		threads[thread_num] = thread([A, start_equasion, amount_of_equasions, zero_iteration, &X] {
+		threads[thread_num] = thread([A, start_equasion, size, zero_iteration, &X, first] {
 
 			// Записываем результат функции во временный вектор
-			 gaussZeidel(A, start_equasion, amount_of_equasions, zero_iteration, N, MAX_ITER_AMOUNT, X);
+			gaussZeidel(A, size, N, first, zero_iteration, MAX_ITER_AMOUNT, X);
 			});
 
-		// Переходим к следующим уравнениям системы
-		start_equasion += amount_of_equasions;
+		first += size;
 	}
 
 	// Дожидаемся окончания работы всех потоков
